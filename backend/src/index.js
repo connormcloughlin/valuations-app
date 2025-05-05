@@ -2,6 +2,17 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const sql = require('mssql');
+const swaggerUi = require('swagger-ui-express');
+const swaggerDocument = require('./swagger.json');
+const authRoutes = require('./routes/auth');
+const ordersRoutes = require('./routes/orders');
+const appointmentsRoutes = require('./routes/appointments');
+const surveyorsRoutes = require('./routes/surveyors');
+const itemsRoutes = require('./routes/items');
+const clientsRoutes = require('./routes/clients');
+const reportsRoutes = require('./routes/reports');
+const { errorHandler } = require('./middleware/errorHandler');
+const { authenticateToken } = require('./middleware/auth');
 
 const app = express();
 
@@ -21,24 +32,51 @@ const dbConfig = {
   }
 };
 
-// Database connection
-sql.connect(dbConfig)
-  .then(() => console.log('Connected to Azure SQL Database'))
-  .catch(err => console.error('Database connection failed:', err));
+// Global SQL pool
+const pool = new sql.ConnectionPool(dbConfig);
+const poolConnect = pool.connect();
 
-// Routes
-app.use('/api/orders', require('./routes/orders'));
-app.use('/api/appointments', require('./routes/appointments'));
-app.use('/api/surveyors', require('./routes/surveyors'));
-app.use('/api/items', require('./routes/items'));
-
-// Error handling middleware
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: 'Something went wrong!' });
+pool.on('error', err => {
+  console.error('SQL Pool Error:', err);
 });
 
+// Make db connection available to routes
+app.use((req, res, next) => {
+  req.db = pool;
+  next();
+});
+
+// API documentation
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/orders', authenticateToken, ordersRoutes);
+app.use('/api/appointments', authenticateToken, appointmentsRoutes);
+app.use('/api/surveyors', authenticateToken, surveyorsRoutes);
+app.use('/api/items', authenticateToken, itemsRoutes);
+app.use('/api/clients', authenticateToken, clientsRoutes);
+app.use('/api/reports', authenticateToken, reportsRoutes);
+
+// Health check endpoint
+app.get('/health', (req, res) => {
+  res.status(200).json({ status: 'ok', timestamp: new Date() });
+});
+
+// Error handling middleware
+app.use(errorHandler);
+
+// Start server
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
-}); 
+
+poolConnect
+  .then(() => {
+    console.log('Connected to Azure SQL Database');
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+    });
+  })
+  .catch(err => {
+    console.error('Database connection failed:', err);
+    process.exit(1);
+  }); 
